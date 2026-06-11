@@ -1,13 +1,13 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
 from ingestion import ingest_dataset
 from models import Dataset, DatasetColumn
+from search import search_dataset
 
 app = FastAPI(title="data-lens")
 
@@ -52,6 +52,19 @@ class DatasetInfo(BaseModel):
     created_at: str
     columns: list[ColumnInfo]
     schema: dict
+
+
+class SearchRow(BaseModel):
+    id: int
+    data: dict
+    score: float
+
+
+class SearchResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    rows: list[SearchRow]
 
 
 # ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -127,4 +140,44 @@ def dataset_info(
             for c in columns
         ],
         schema=dataset.schema,
+    )
+
+
+@app.get("/datasets/{dataset_id}/search", response_model=SearchResponse)
+def search(
+    dataset_id: int,
+    q: str = Query(..., description='Keywords, "quoted phrase", word1 AND word2, word1 OR word2'),
+    columns: str | None = Query(None, description="Comma-separated column names to search (default: all text columns)"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id, Dataset.user_id == user_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    col_list = [c.strip() for c in columns.split(",")] if columns else None
+
+    try:
+        result = search_dataset(
+            db=db,
+            dataset_id=dataset_id,
+            query_str=q,
+            columns=col_list,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return SearchResponse(
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        rows=[SearchRow(**row) for row in result.rows],
     )
