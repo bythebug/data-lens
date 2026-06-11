@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Env
+.env
+.env.*
+
+# Claude
+.claude/
+
+# Markdown (except README.md)
+*.md
+!README.md
+
+# OS
+.DS_Store
