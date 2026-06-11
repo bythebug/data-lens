@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from parsers import (
+from ingestion.parsers import (
     clean_data,
     detect_column_types,
     detect_encoding,
@@ -265,7 +265,7 @@ def test_large_file_memory_efficiency():
 
 
 def test_ingest_dataset_empty_file_raises():
-    from ingestion import ingest_dataset
+    from ingestion.pipeline import ingest_dataset
 
     db = MagicMock()
     stream = make_stream("name,age\n")  # header only, no data rows
@@ -275,7 +275,7 @@ def test_ingest_dataset_empty_file_raises():
 
 
 def test_ingest_dataset_calls_commit_once():
-    from ingestion import ingest_dataset
+    from ingestion.pipeline import ingest_dataset
 
     csv = "name,age\nAlice,30\nBob,25\n"
     db = MagicMock()
@@ -284,18 +284,17 @@ def test_ingest_dataset_calls_commit_once():
     db.commit = MagicMock()
     db.refresh = MagicMock()
 
-    # Give the flushed dataset a fake id
     def set_id(obj):
-        if isinstance(obj, __import__("models").Dataset):
+        if isinstance(obj, __import__("db.models", fromlist=["Dataset"]).Dataset):
             obj.id = 99
 
     db.add.side_effect = lambda obj: None
     db.flush.side_effect = lambda: set_id(
         next((c.args[0] for c in db.add.call_args_list
-              if isinstance(c.args[0], __import__("models").Dataset)), None)
+              if isinstance(c.args[0], __import__("db.models", fromlist=["Dataset"]).Dataset)), None)
     )
 
-    with patch("ingestion.DatasetRow"), patch("ingestion.DatasetColumn"), patch("ingestion.SearchIndex"):
+    with patch("ingestion.pipeline.DatasetRow"), patch("ingestion.pipeline.DatasetColumn"), patch("ingestion.pipeline.SearchIndex"):
         try:
             ingest_dataset(db, user_id=1, file_stream=make_stream(csv), dataset_name="t")
         except Exception:

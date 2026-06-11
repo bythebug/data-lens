@@ -22,9 +22,7 @@ DATE_FORMATS = [
     "%Y-%m-%d %H:%M:%S",
 ]
 
-# Rows sampled per column for type detection
 _TYPE_SAMPLE_SIZE = 500
-# Minimum fraction of non-null values that must match a type to be declared
 _TYPE_THRESHOLD = 0.80
 
 
@@ -34,7 +32,6 @@ _TYPE_THRESHOLD = 0.80
 def detect_encoding(raw: bytes, sample_size: int = 20_000) -> str:
     result = chardet.detect(raw[:sample_size])
     encoding = (result.get("encoding") or "utf-8").lower()
-    # Normalise ambiguous aliases to latin-1 so Python's codec accepts them
     if encoding in ("ascii", "iso-8859-1", "windows-1252"):
         return "latin-1"
     return encoding
@@ -138,7 +135,7 @@ def stream_csv_chunks(
         yield columns, _df_to_rows(chunk)
 
 
-# ─── Type detection (manual implementation) ──────────────────────────────────
+# ─── Type detection ───────────────────────────────────────────────────────────
 
 
 def _is_numeric(value: str) -> bool:
@@ -172,7 +169,7 @@ def detect_column_types(rows: list[dict]) -> dict[str, str]:
     result: dict[str, str] = {}
 
     for col in columns:
-        sample = [r[col] for r in rows if r.get(col) is not None][: _TYPE_SAMPLE_SIZE]
+        sample = [r[col] for r in rows if r.get(col) is not None][:_TYPE_SAMPLE_SIZE]
 
         if not sample:
             result[col] = "text"

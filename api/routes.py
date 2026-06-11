@@ -1,20 +1,18 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db
-from ingestion import ingest_dataset
-from models import Dataset, DatasetColumn
-from search import search_dataset
+from db.models import Dataset, DatasetColumn
+from db.session import get_db
+from ingestion.pipeline import ingest_dataset
+from search.engine import search_dataset
 
-app = FastAPI(title="data-lens")
+router = APIRouter()
 
 
 # ─── Auth placeholder ─────────────────────────────────────────────────────────
-# No auth layer yet — caller passes X-User-Id header.
-# Replace with real JWT/session validation when auth is added.
 
 def current_user_id(x_user_id: Annotated[str | None, Header()] = None) -> int:
     if not x_user_id:
@@ -70,7 +68,7 @@ class SearchResponse(BaseModel):
 # ─── Endpoints ───────────────────────────────────────────────────────────────
 
 
-@app.post("/datasets", response_model=UploadResponse, status_code=201)
+@router.post("/datasets", response_model=UploadResponse, status_code=201)
 async def upload_dataset(
     file: UploadFile = File(...),
     name: str = Form(...),
@@ -93,7 +91,7 @@ async def upload_dataset(
     return UploadResponse(dataset_id=dataset.id, row_count=dataset.row_count)
 
 
-@app.get("/datasets", response_model=list[DatasetSummary])
+@router.get("/datasets", response_model=list[DatasetSummary])
 def list_datasets(
     user_id: int = Depends(current_user_id),
     db: Session = Depends(get_db),
@@ -110,7 +108,7 @@ def list_datasets(
     ]
 
 
-@app.get("/datasets/{dataset_id}/info", response_model=DatasetInfo)
+@router.get("/datasets/{dataset_id}/info", response_model=DatasetInfo)
 def dataset_info(
     dataset_id: int,
     user_id: int = Depends(current_user_id),
@@ -143,11 +141,11 @@ def dataset_info(
     )
 
 
-@app.get("/datasets/{dataset_id}/search", response_model=SearchResponse)
+@router.get("/datasets/{dataset_id}/search", response_model=SearchResponse)
 def search(
     dataset_id: int,
     q: str = Query(..., description='Keywords, "quoted phrase", word1 AND word2, word1 OR word2'),
-    columns: str | None = Query(None, description="Comma-separated column names to search (default: all text columns)"),
+    columns: str | None = Query(None, description="Comma-separated column names to search"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user_id: int = Depends(current_user_id),

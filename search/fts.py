@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 FTS_CONFIG = "english"
 
-# Only allow alphanumeric + underscore in names that land in DDL
 _SAFE_IDENT_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -27,11 +26,8 @@ def fts_index_name(dataset_id: int, column_name: str) -> str:
 def build_tsvector_sql(column_names: list[str], config: str = FTS_CONFIG) -> str:
     """
     Return a SQL fragment that computes a tsvector over one or more JSONB keys.
-    Each column name must be a safe SQL identifier.
-    Example output (single col):
-        to_tsvector('english', coalesce(data->>'name', ''))
-    Example output (multi col):
-        to_tsvector('english', coalesce(data->>'name', '') || ' ' || coalesce(data->>'bio', ''))
+    Example (single col):  to_tsvector('english', coalesce(data->>'name', ''))
+    Example (multi col):   to_tsvector('english', coalesce(data->>'name', '') || chr(32) || coalesce(data->>'bio', ''))
     """
     for col in column_names:
         _assert_safe_ident(col)
@@ -75,7 +71,7 @@ def index_exists(db: Session, dataset_id: int, column_name: str) -> bool:
 
 
 def get_text_columns(db: Session, dataset_id: int) -> list[str]:
-    from models import DatasetColumn
+    from db.models import DatasetColumn
 
     rows = (
         db.query(DatasetColumn.column_name)

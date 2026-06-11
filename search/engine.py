@@ -6,24 +6,21 @@ natively with the 'english' text search configuration.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from fts_integration import (
+from db.models import DatasetColumn, SearchIndex
+from .fts import (
     FTS_CONFIG,
     build_tsvector_sql,
     create_fts_index,
     get_text_columns,
     index_exists,
 )
-from models import DatasetColumn, SearchIndex
-
-
-# ─── Query model ─────────────────────────────────────────────────────────────
 
 
 class QueryType(Enum):
@@ -36,8 +33,8 @@ class QueryType(Enum):
 class ParsedQuery:
     original: str
     query_type: QueryType
-    terms: list[str]    # individual words/phrases (for highlighting later)
-    normalized: str     # passed verbatim to websearch_to_tsquery
+    terms: list[str]
+    normalized: str
 
 
 @dataclass
@@ -45,7 +42,7 @@ class SearchResult:
     total: int
     page: int
     page_size: int
-    rows: list[dict[str, Any]]  # [{id, data, score}, ...]
+    rows: list[dict[str, Any]]
 
 
 # ─── Query parsing ────────────────────────────────────────────────────────────
@@ -60,12 +57,11 @@ def parse_query(query_str: str) -> ParsedQuery:
     Classify and normalise a raw user query.
 
     Supported syntax (passed through to websearch_to_tsquery):
-      hello world        → implicit AND (matches rows containing both)
-      "hello world"      → phrase match (words must be adjacent)
+      hello world        → implicit AND
+      "hello world"      → phrase match
       hello AND world    → explicit AND
       hello OR world     → boolean OR
-      hello -world       → NOT (minus prefix)
-      "foo" OR bar       → mixed phrase + boolean
+      hello -world       → NOT
     """
     s = query_str.strip()
     if not s:
@@ -87,12 +83,7 @@ def parse_query(query_str: str) -> ParsedQuery:
         if t.upper() not in ("AND", "OR")
     ]
 
-    return ParsedQuery(
-        original=s,
-        query_type=qtype,
-        terms=terms,
-        normalized=s,  # websearch_to_tsquery accepts raw user syntax
-    )
+    return ParsedQuery(original=s, query_type=qtype, terms=terms, normalized=s)
 
 
 # ─── Index management ────────────────────────────────────────────────────────
@@ -132,13 +123,11 @@ def _resolve_columns(
     dataset_id: int,
     requested: list[str] | None,
 ) -> list[str]:
-    """Return the columns to search over, defaulting to all text columns."""
     if requested:
         return requested
     text_cols = get_text_columns(db, dataset_id)
     if text_cols:
         return text_cols
-    # Dataset has no text columns — fall back to all columns
     rows = (
         db.query(DatasetColumn.column_name)
         .filter(DatasetColumn.dataset_id == dataset_id)
@@ -158,11 +147,8 @@ def search_dataset(
     """
     Full-text search over dataset_rows for a given dataset.
 
-    PostgreSQL does the heavy lifting:
-    - websearch_to_tsquery parses the query (handles stemming, stop words, phrases)
-    - @@ operator checks containment
-    - ts_rank scores each matching row by term frequency / document length
-
+    PostgreSQL handles stemming, stop words, and phrase matching via
+    websearch_to_tsquery. ts_rank scores results by term frequency / length.
     Results are returned in descending relevance order, paginated.
     """
     parsed = parse_query(query_str)
@@ -173,7 +159,6 @@ def search_dataset(
 
     tsvec = build_tsvector_sql(col_names)
     offset = (page - 1) * page_size
-
     params: dict[str, Any] = {
         "dataset_id": dataset_id,
         "config": FTS_CONFIG,
@@ -201,7 +186,7 @@ def search_dataset(
                 ts_rank(
                     {tsvec},
                     websearch_to_tsquery(:config, :query),
-                    32          -- normalization: divide by document length
+                    32
                 ) AS score
             FROM dataset_rows
             WHERE dataset_id = :dataset_id

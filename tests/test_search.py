@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from fts_integration import _assert_safe_ident, build_tsvector_sql, fts_index_name
-from search import (
+from search.fts import _assert_safe_ident, build_tsvector_sql, fts_index_name
+from search.engine import (
     ParsedQuery,
     QueryType,
     SearchResult,
@@ -167,7 +167,7 @@ def test_simple_search_returns_rows():
     ]
     db = _make_db(count=2, rows=fake_rows)
 
-    with patch("search.get_text_columns", return_value=["name"]):
+    with patch("search.engine.get_text_columns", return_value=["name"]):
         result = search_dataset(db, dataset_id=1, query_str="alice")
 
     assert result.total == 2
@@ -179,7 +179,7 @@ def test_simple_search_returns_rows():
 def test_no_results():
     db = _make_db(count=0, rows=[])
 
-    with patch("search.get_text_columns", return_value=["name"]):
+    with patch("search.engine.get_text_columns", return_value=["name"]):
         result = search_dataset(db, dataset_id=1, query_str="zzznomatch")
 
     assert result.total == 0
@@ -191,7 +191,7 @@ def test_no_results():
 def test_phrase_search():
     db = _make_db(count=1, rows=[Row(id=5, data={"bio": "data science"}, score=0.75)])
 
-    with patch("search.get_text_columns", return_value=["bio"]):
+    with patch("search.engine.get_text_columns", return_value=["bio"]):
         result = search_dataset(db, dataset_id=1, query_str='"data science"')
 
     assert result.total == 1
@@ -208,7 +208,7 @@ def test_boolean_operators():
         Row(id=3, data={"tag": "python"}, score=0.6),
     ])
 
-    with patch("search.get_text_columns", return_value=["tag"]):
+    with patch("search.engine.get_text_columns", return_value=["tag"]):
         result = search_dataset(db, dataset_id=1, query_str="python OR ruby")
 
     assert result.total == 3
@@ -225,7 +225,7 @@ def test_relevance_ranking():
     ]
     db = _make_db(count=3, rows=fake_rows)
 
-    with patch("search.get_text_columns", return_value=["text"]):
+    with patch("search.engine.get_text_columns", return_value=["text"]):
         result = search_dataset(db, dataset_id=1, query_str="python")
 
     scores = [r["score"] for r in result.rows]
@@ -236,7 +236,7 @@ def test_search_performance_uses_pagination():
     """search_dataset must pass LIMIT and OFFSET — never load all rows."""
     db = _make_db(count=1000, rows=[Row(id=i, data={}, score=0.5) for i in range(20)])
 
-    with patch("search.get_text_columns", return_value=["text"]):
+    with patch("search.engine.get_text_columns", return_value=["text"]):
         search_dataset(db, dataset_id=1, query_str="test", page=3, page_size=20)
 
     # Second execute call is the row fetch — must have limit and offset params
@@ -248,7 +248,7 @@ def test_search_performance_uses_pagination():
 def test_pagination_offset_beyond_total_returns_empty():
     db = _make_db(count=5, rows=[])
 
-    with patch("search.get_text_columns", return_value=["text"]):
+    with patch("search.engine.get_text_columns", return_value=["text"]):
         result = search_dataset(db, dataset_id=1, query_str="test", page=2, page_size=10)
 
     # offset (10) >= total (5) → no row fetch query
@@ -259,7 +259,7 @@ def test_pagination_offset_beyond_total_returns_empty():
 def test_explicit_columns_override_text_columns():
     db = _make_db(count=1, rows=[Row(id=1, data={"notes": "hello"}, score=0.5)])
 
-    with patch("search.get_text_columns") as mock_get_text:
+    with patch("search.engine.get_text_columns") as mock_get_text:
         search_dataset(db, dataset_id=1, query_str="hello", columns=["notes"])
         # get_text_columns should NOT be called when columns are explicit
         mock_get_text.assert_not_called()
@@ -273,8 +273,8 @@ def test_build_search_index_creates_index():
     db.query.return_value.filter_by.return_value.first.return_value = None
 
     with (
-        patch("search.index_exists", return_value=False) as mock_exists,
-        patch("search.create_fts_index") as mock_create,
+        patch("search.engine.index_exists", return_value=False) as mock_exists,
+        patch("search.engine.create_fts_index") as mock_create,
     ):
         created = build_search_index(db, dataset_id=7, column_name="bio")
 
@@ -287,7 +287,7 @@ def test_build_search_index_creates_index():
 def test_build_search_index_skips_if_exists():
     db = MagicMock()
 
-    with patch("search.index_exists", return_value=True):
+    with patch("search.engine.index_exists", return_value=True):
         created = build_search_index(db, dataset_id=7, column_name="bio")
 
     assert created is False

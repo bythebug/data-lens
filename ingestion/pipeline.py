@@ -7,8 +7,8 @@ import io
 
 from sqlalchemy.orm import Session
 
-from models import Dataset, DatasetColumn, DatasetRow, SearchIndex
-from parsers import (
+from db.models import Dataset, DatasetColumn, DatasetRow, SearchIndex
+from .parsers import (
     clean_data,
     detect_column_types,
     stream_csv_chunks,
@@ -16,9 +16,7 @@ from parsers import (
 )
 
 _CHUNK_SIZE = 500
-# Number of rows sampled for type detection (first chunk is reused)
 _SAMPLE_ROWS = 1000
-# Number of rows validated before bulk insert begins
 _VALIDATE_SAMPLE = 100
 
 
@@ -51,23 +49,16 @@ def ingest_dataset(
     schema: dict = {}
     dataset: Dataset | None = None
     total_rows = 0
-    sample_buffer: list[dict] = []
 
     for chunk_cols, chunk_rows in stream_csv_chunks(file_stream, chunk_size=_CHUNK_SIZE):
         if not chunk_rows:
             continue
 
-        # ── First chunk: type detection + schema creation ────────────────────
         if column_names is None:
-            if not chunk_rows:
-                raise ValueError("CSV file is empty or has no data rows")
-
             column_names = chunk_cols
-            sample_buffer = chunk_rows[: _SAMPLE_ROWS]
-            column_types = detect_column_types(sample_buffer)
+            column_types = detect_column_types(chunk_rows[:_SAMPLE_ROWS])
             schema = _build_schema(column_names, column_types)
 
-            # Validate first N rows early — surface obvious type mismatches
             for i, row in enumerate(chunk_rows[:_VALIDATE_SAMPLE]):
                 valid, errors = validate_row(row, schema)
                 if not valid:
@@ -80,7 +71,7 @@ def ingest_dataset(
                 row_count=0,
             )
             db.add(dataset)
-            db.flush()  # materialise dataset.id before child rows
+            db.flush()
 
             for col_name in column_names:
                 db.add(DatasetColumn(
@@ -89,14 +80,12 @@ def ingest_dataset(
                     data_type=column_types.get(col_name, "text"),
                 ))
 
-            # Register a GIN-backed search index entry for the full document
             db.add(SearchIndex(
                 dataset_id=dataset.id,
                 column_name="*",
                 index_type="btree",
             ))
 
-        # ── Every chunk: clean + bulk insert ────────────────────────────────
         cleaned = [_clean_row(r, column_types) for r in chunk_rows]
         db.bulk_save_objects([
             DatasetRow(dataset_id=dataset.id, data=row)
