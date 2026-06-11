@@ -4,6 +4,9 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from analytics.aggregation import aggregate_dataset, parse_metric, time_series_aggregate
+from analytics.query_builder import execute_query, parse_filter_input
+from analytics.stats import column_stats, dataset_stats, get_column_types
 from db.models import Dataset, DatasetColumn
 from db.session import get_db
 from ingestion.pipeline import ingest_dataset
@@ -179,3 +182,146 @@ def search(
         page_size=result.page_size,
         rows=[SearchRow(**row) for row in result.rows],
     )
+
+
+# ─── Advanced querying ────────────────────────────────────────────────────────
+
+
+class QueryRow(BaseModel):
+    id: int
+    data: dict
+
+
+class QueryResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    rows: list[QueryRow]
+
+
+@router.get("/datasets/{dataset_id}/query", response_model=QueryResponse)
+def query_dataset(
+    dataset_id: int,
+    filters: str | None = Query(
+        None,
+        description='JSON filter array: [{"column":"age","operator":">","value":30}]',
+    ),
+    logic: str = Query("AND", description="AND or OR — joins top-level filters"),
+    sort_by: str | None = Query(None),
+    sort_dir: str = Query("ASC", description="ASC or DESC"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id, Dataset.user_id == user_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    try:
+        filter_group = None
+        if filters:
+            filter_group = parse_filter_input(filters)
+            filter_group.logic = filter_group.logic.__class__(logic.upper())
+
+        result = execute_query(
+            db=db,
+            dataset_id=dataset_id,
+            filter_group=filter_group,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            page_size=page_size,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return QueryResponse(
+        total=result.total,
+        page=result.page,
+        page_size=result.page_size,
+        rows=[QueryRow(**row) for row in result.rows],
+    )
+
+
+@router.get("/datasets/{dataset_id}/aggregate")
+def aggregate(
+    dataset_id: int,
+    group_by: str = Query(..., description="Comma-separated column names, e.g. region,category"),
+    metrics: str = Query(..., description="Comma-separated metrics, e.g. SUM(revenue),AVG(price),COUNT(*)"),
+    filters: str | None = Query(None),
+    sort_by: str | None = Query(None, description="Metric alias or group-by column"),
+    sort_dir: str = Query("DESC"),
+    time_column: str | None = Query(None, description="Date column for time-series grouping"),
+    time_truncate: str = Query("month", description="day | week | month | quarter | year"),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id, Dataset.user_id == user_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    try:
+        parsed_metrics = [parse_metric(m.strip()) for m in metrics.split(",")]
+        filter_group = parse_filter_input(filters) if filters else None
+
+        if time_column:
+            if len(parsed_metrics) != 1:
+                raise ValueError("Time-series aggregation requires exactly one metric")
+            rows = time_series_aggregate(
+                db=db,
+                dataset_id=dataset_id,
+                date_column=time_column,
+                metric=parsed_metrics[0],
+                truncate=time_truncate,
+                filter_group=filter_group,
+            )
+        else:
+            group_cols = [c.strip() for c in group_by.split(",")]
+            rows = aggregate_dataset(
+                db=db,
+                dataset_id=dataset_id,
+                group_by=group_cols,
+                metrics=parsed_metrics,
+                filter_group=filter_group,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+            )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"rows": rows}
+
+
+@router.get("/datasets/{dataset_id}/stats")
+def stats(
+    dataset_id: int,
+    column: str | None = Query(None, description="Single column name; omit for all columns"),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id, Dataset.user_id == user_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    try:
+        if column:
+            col_types = get_column_types(db, dataset_id)
+            if column not in col_types:
+                raise HTTPException(status_code=404, detail=f"Column '{column}' not found")
+            return column_stats(db, dataset_id, column, col_types[column])
+        return {"columns": dataset_stats(db, dataset_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
