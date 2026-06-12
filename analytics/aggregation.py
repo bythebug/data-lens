@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from analytics.optimizer import timed_execute
 from .query_builder import (
     FilterGroup,
     assert_safe_column,
@@ -115,7 +116,8 @@ def aggregate_dataset(
     order_col = sort_by or metrics[0].alias
     direction = sort_dir.upper() if sort_dir.upper() in ("ASC", "DESC") else "DESC"
 
-    rows_raw = db.execute(
+    rows_raw = timed_execute(
+        db,
         text(f"""
             SELECT {', '.join(select_groups + select_metrics)}
             FROM dataset_rows
@@ -125,6 +127,7 @@ def aggregate_dataset(
             LIMIT :limit
         """),
         {**params, "limit": limit},
+        label=f"aggregate ds={dataset_id}",
     ).fetchall()
 
     return [dict(row._mapping) for row in rows_raw]
@@ -165,7 +168,8 @@ def time_series_aggregate(
 
     metric_expr = _metric_sql(metric, column_types.get(metric.column, "text"))
 
-    rows_raw = db.execute(
+    rows_raw = timed_execute(
+        db,
         text(f"""
             SELECT
                 date_trunc(:truncate, (data->>'{date_column}')::date) AS period,
@@ -177,6 +181,7 @@ def time_series_aggregate(
             ORDER BY period ASC
         """),
         params,
+        label=f"time-series ds={dataset_id} trunc={truncate}",
     ).fetchall()
 
     return [

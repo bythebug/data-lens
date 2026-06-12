@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from analytics.optimizer import timed_execute
 from db.models import DatasetColumn, SearchIndex
 from .fts import (
     FTS_CONFIG,
@@ -165,7 +166,10 @@ def search_dataset(
         "query": parsed.normalized,
     }
 
-    total: int = db.execute(
+    label = f"fts ds={dataset_id}"
+
+    total: int = timed_execute(
+        db,
         text(f"""
             SELECT COUNT(*)
             FROM dataset_rows
@@ -173,12 +177,14 @@ def search_dataset(
               AND {tsvec} @@ websearch_to_tsquery(:config, :query)
         """),
         params,
+        label=f"{label} count",
     ).scalar() or 0
 
     if total == 0 or offset >= total:
         return SearchResult(total=int(total), page=page, page_size=page_size, rows=[])
 
-    rows_raw = db.execute(
+    rows_raw = timed_execute(
+        db,
         text(f"""
             SELECT
                 id,
@@ -195,6 +201,7 @@ def search_dataset(
             LIMIT :limit OFFSET :offset
         """),
         {**params, "limit": page_size, "offset": offset},
+        label=f"{label} rows",
     ).fetchall()
 
     return SearchResult(
