@@ -1,12 +1,23 @@
+import io
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from analytics.aggregation import aggregate_dataset, parse_metric, time_series_aggregate
+from analytics.export import export_to_csv, export_to_json, flatten_row
 from analytics.query_builder import execute_query, parse_filter_input
 from analytics.stats import column_stats, dataset_stats, get_column_types
+from analytics.statistics import (
+    basic_stats,
+    correlation_matrix,
+    distribution_analysis,
+    outlier_detection,
+    quantiles,
+)
+from analytics.time_series import growth_rate, moving_average, resample_by_period
 from db.models import Dataset, DatasetColumn
 from db.session import get_db
 from ingestion.pipeline import ingest_dataset
@@ -325,3 +336,126 @@ def stats(
         return {"columns": dataset_stats(db, dataset_id)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ─── Statistical analysis ─────────────────────────────────────────────────────
+
+
+def _require_dataset(db: Session, dataset_id: int, user_id: int) -> Dataset:
+    ds = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.user_id == user_id).first()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return ds
+
+
+def _require_numeric_column(db: Session, dataset_id: int, column: str) -> None:
+    col_types = get_column_types(db, dataset_id)
+    if column not in col_types:
+        raise HTTPException(status_code=404, detail=f"Column '{column}' not found")
+    if col_types[column] != "numeric":
+        raise HTTPException(status_code=422, detail=f"Column '{column}' is not numeric")
+
+
+@router.get("/datasets/{dataset_id}/stats/{column}")
+def column_statistics(
+    dataset_id: int,
+    column: str,
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    _require_dataset(db, dataset_id, user_id)
+    _require_numeric_column(db, dataset_id, column)
+    try:
+        result = basic_stats(db, dataset_id, column)
+        q = quantiles(db, dataset_id, column)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if result is None:
+        raise HTTPException(status_code=404, detail="No non-null values found")
+    return {**result, "quantiles": q}
+
+
+@router.get("/datasets/{dataset_id}/distribution/{column}")
+def column_distribution(
+    dataset_id: int,
+    column: str,
+    buckets: int = Query(20, ge=2, le=100),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    _require_dataset(db, dataset_id, user_id)
+    _require_numeric_column(db, dataset_id, column)
+    result = distribution_analysis(db, dataset_id, column, buckets=buckets)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No non-null values found")
+    return result
+
+
+@router.get("/datasets/{dataset_id}/correlations")
+def correlations(
+    dataset_id: int,
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    _require_dataset(db, dataset_id, user_id)
+    return correlation_matrix(db, dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/outliers/{column}")
+def outliers(
+    dataset_id: int,
+    column: str,
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    _require_dataset(db, dataset_id, user_id)
+    _require_numeric_column(db, dataset_id, column)
+    result = outlier_detection(db, dataset_id, column)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No non-null values found")
+    return result
+
+
+@router.get("/datasets/{dataset_id}/export")
+def export_dataset(
+    dataset_id: int,
+    format: str = Query("csv", description="csv or json"),
+    filters: str | None = Query(None),
+    page_size: int = Query(10_000, ge=1, le=100_000),
+    user_id: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+):
+    _require_dataset(db, dataset_id, user_id)
+
+    try:
+        filter_group = parse_filter_input(filters) if filters else None
+        result = execute_query(
+            db=db,
+            dataset_id=dataset_id,
+            filter_group=filter_group,
+            page=1,
+            page_size=page_size,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    flat_rows = [flatten_row(r) for r in result.rows]
+    fmt = format.lower()
+
+    if fmt == "csv":
+        content = export_to_csv(flat_rows)
+        return StreamingResponse(
+            io.StringIO(content),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="dataset_{dataset_id}.csv"'
+            },
+        )
+
+    if fmt == "json":
+        return StreamingResponse(
+            io.StringIO(export_to_json(flat_rows)),
+            media_type="application/json",
+        )
+
+    raise HTTPException(status_code=400, detail="format must be 'csv' or 'json'")
