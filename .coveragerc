@@ -1,0 +1,16 @@
+[run]
+source = analytics, ingestion, search, db, api
+omit =
+    */tests/*
+    */__pycache__/*
+    .venv/*
+    main.py
+    config.py
+
+[report]
+show_missing = true
+skip_empty = true
+precision = 1
+
+[html]
+directory = htmlcov
