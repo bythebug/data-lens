@@ -38,6 +38,11 @@ export default function App() {
           <DatasetView id={selectedId} onBack={() => setView('list')} />
         )}
       </main>
+
+      <footer className="footer">
+        <span>Analytics and search platform for CSV datasets. Full-text search, filtering, aggregation, statistics, and time-series analysis via REST API.</span>
+        <a href="https://github.com/bythebug/data-lens" target="_blank" rel="noreferrer">github.com/bythebug/data-lens</a>
+      </footer>
     </div>
   );
 }
