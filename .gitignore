@@ -16,9 +16,11 @@ build/
 # Claude
 .claude/
 
-# Markdown (except README.md)
+# Markdown (ship docs, ignore study notes)
 *.md
 !README.md
+!API_DOCS.md
+!QUERY_GUIDE.md
 
 # OS
 .DS_Store
