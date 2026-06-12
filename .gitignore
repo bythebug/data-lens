@@ -22,5 +22,11 @@ build/
 !API_DOCS.md
 !QUERY_GUIDE.md
 
+# Node
+node_modules/
+
+# Test artifacts
+.coverage
+
 # OS
 .DS_Store

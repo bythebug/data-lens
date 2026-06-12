@@ -29,5 +29,29 @@ services:
     # Restart on crash (e.g. if DB wasn't fully ready)
     restart: on-failure
 
+  # Seeds the demo account (user_id=1) and three sample datasets on first run.
+  # Idempotent: exits immediately if data already exists.
+  seeder:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/data_lens
+    command: python scripts/seed_demo.py
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # React frontend served by nginx.
+  # The browser calls the API directly at localhost:8000, so VITE_API_URL stays
+  # at its default (http://localhost:8000) — no extra config needed for local use.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+
 volumes:
   postgres_data:
